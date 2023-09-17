@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: granny <contact@granny.dev>
+Date: Sat, 16 Sep 2023 20:25:36 -0700
+Subject: [PATCH] Move Log4j plugins back into main sourceset
+
+
+diff --git a/build.gradle.kts b/build.gradle.kts
+index 056fbeb009b200d0d28649f43ba28103212f2ad8..30d0a260c461cb2e8e82ac44b47971ecda47c037 100644
+--- a/build.gradle.kts
++++ b/build.gradle.kts
+@@ -5,13 +5,13 @@ plugins {
+     `maven-publish`
+     id("com.github.johnrengelman.shadow")
+ }
+-
+-val log4jPlugins = sourceSets.create("log4jPlugins")
++// ForkTest start
++/*val log4jPlugins = sourceSets.create("log4jPlugins")
+ configurations.named(log4jPlugins.compileClasspathConfigurationName) {
+     extendsFrom(configurations.compileClasspath.get())
+ }
+-val alsoShade: Configuration by configurations.creating
+-
++val alsoShade: Configuration by configurations.creating*/
++// ForkTest end
+ dependencies {
+     // ForkTest start
+     implementation(project(":forktest-api"))
+@@ -31,9 +31,10 @@ dependencies {
+           Scanning takes about 1-2 seconds so adding this speeds up the server start.
+      */
+     implementation("org.apache.logging.log4j:log4j-core:2.19.0") // Paper - implementation
+-    log4jPlugins.annotationProcessorConfigurationName("org.apache.logging.log4j:log4j-core:2.19.0") // Paper - Needed to generate meta for our Log4j plugins
+-    runtimeOnly(log4jPlugins.output)
+-    alsoShade(log4jPlugins.output)
++    // ForkTest start
++    annotationProcessor("org.apache.logging.log4j:log4j-core:2.19.0") // Paper - Needed to generate meta for our Log4j plugins
++    runtimeOnly("org.apache.logging.log4j:log4j-core:2.19.0")
++    // ForkTest end
+     implementation("io.netty:netty-codec-haproxy:4.1.87.Final") // Paper - Add support for proxy protocol
+     // Paper end
+     implementation("org.apache.logging.log4j:log4j-iostreams:2.19.0") // Paper - remove exclusion
+@@ -110,7 +111,7 @@ relocation {
+ }
+ 
+ tasks.shadowJar {
+-    configurations = listOf(project.configurations.vanillaServer.get(), alsoShade)
++    configurations = listOf(project.configurations.vanillaServer.get()) // ForkTest
+     archiveClassifier.set("mojang-mapped")
+ 
+     for (relocation in relocation.relocations.get()) {
+diff --git a/src/log4jPlugins/java/io/papermc/paper/console/StripANSIConverter.java b/src/main/java/io/papermc/paper/console/StripANSIConverter.java
+similarity index 100%
+rename from src/log4jPlugins/java/io/papermc/paper/console/StripANSIConverter.java
+rename to src/main/java/io/papermc/paper/console/StripANSIConverter.java
+diff --git a/src/log4jPlugins/java/io/papermc/paper/logging/DelegateLogEvent.java b/src/main/java/io/papermc/paper/logging/DelegateLogEvent.java
+similarity index 100%
+rename from src/log4jPlugins/java/io/papermc/paper/logging/DelegateLogEvent.java
+rename to src/main/java/io/papermc/paper/logging/DelegateLogEvent.java
+diff --git a/src/log4jPlugins/java/io/papermc/paper/logging/ExtraClassInfoLogEvent.java b/src/main/java/io/papermc/paper/logging/ExtraClassInfoLogEvent.java
+similarity index 100%
+rename from src/log4jPlugins/java/io/papermc/paper/logging/ExtraClassInfoLogEvent.java
+rename to src/main/java/io/papermc/paper/logging/ExtraClassInfoLogEvent.java
+diff --git a/src/log4jPlugins/java/io/papermc/paper/logging/ExtraClassInfoRewritePolicy.java b/src/main/java/io/papermc/paper/logging/ExtraClassInfoRewritePolicy.java
+similarity index 100%
+rename from src/log4jPlugins/java/io/papermc/paper/logging/ExtraClassInfoRewritePolicy.java
+rename to src/main/java/io/papermc/paper/logging/ExtraClassInfoRewritePolicy.java
+diff --git a/src/log4jPlugins/java/io/papermc/paper/logging/StacktraceDeobfuscatingRewritePolicy.java b/src/main/java/io/papermc/paper/logging/StacktraceDeobfuscatingRewritePolicy.java
+similarity index 100%
+rename from src/log4jPlugins/java/io/papermc/paper/logging/StacktraceDeobfuscatingRewritePolicy.java
+rename to src/main/java/io/papermc/paper/logging/StacktraceDeobfuscatingRewritePolicy.java

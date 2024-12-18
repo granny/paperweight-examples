@@ -1,0 +1,1246 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: granny <contact@granny.dev>
+Date: Tue, 17 Dec 2024 19:28:12 -0800
+Subject: [PATCH] Ridables
+
+
+diff --git a/net/minecraft/world/entity/Entity.java b/net/minecraft/world/entity/Entity.java
+index f70e77dcce4d94b06efd27273194ce95f4b336ec..65e84e79dbde8d46f6645c3b35e1ae9b22ed0b66 100644
+--- a/net/minecraft/world/entity/Entity.java
++++ b/net/minecraft/world/entity/Entity.java
+@@ -344,7 +344,7 @@ public abstract class Entity implements SyncedDataHolder, Nameable, EntityAccess
+     private final Set<String> tags = new io.papermc.paper.util.SizeLimitedSet<>(new it.unimi.dsi.fastutil.objects.ObjectOpenHashSet<>(), MAX_ENTITY_TAG_COUNT); // Paper - fully limit tag size - replace set impl
+     private final double[] pistonDeltas = new double[]{0.0, 0.0, 0.0};
+     private long pistonDeltasGameTime;
+-    private EntityDimensions dimensions;
++    protected EntityDimensions dimensions; // Purpur - private -> protected - Ridables
+     private float eyeHeight;
+     public boolean isInPowderSnow;
+     public boolean wasInPowderSnow;
+@@ -2838,6 +2838,13 @@ public abstract class Entity implements SyncedDataHolder, Nameable, EntityAccess
+                 this.passengers = ImmutableList.copyOf(list);
+             }
+ 
++            // Purpur start - Ridables
++            if (isRidable() && this.passengers.get(0) == passenger && passenger instanceof Player player) {
++                onMount(player);
++                this.rider = player;
++            }
++            // Purpur end - Ridables
++
+             this.gameEvent(GameEvent.ENTITY_MOUNT, passenger);
+         }
+     }
+@@ -2879,6 +2886,12 @@ public abstract class Entity implements SyncedDataHolder, Nameable, EntityAccess
+                 return false;
+             }
+             // CraftBukkit end
++            // Purpur start - Ridables
++            if (this.rider != null && this.passengers.get(0) == this.rider) {
++                onDismount(this.rider);
++                this.rider = null;
++            }
++            // Purpur end - Ridables
+             if (this.passengers.size() == 1 && this.passengers.get(0) == passenger) {
+                 this.passengers = ImmutableList.of();
+             } else {
+@@ -4713,4 +4726,44 @@ public abstract class Entity implements SyncedDataHolder, Nameable, EntityAccess
+         return ((ServerLevel) this.level).isPositionEntityTicking(this.blockPosition());
+     }
+     // Paper end - Expose entity id counter
++    // Purpur start - Ridables
++    @Nullable
++    private Player rider = null;
++
++    @Nullable
++    public Player getRider() {
++        return rider;
++    }
++
++    public boolean isRidable() {
++        return false;
++    }
++
++    public boolean isControllable() {
++        return true;
++    }
++
++    public void onMount(Player rider) {
++        if (this instanceof Mob) {
++            ((Mob) this).setTarget(null, null, false);
++            ((Mob) this).getNavigation().stop();
++        }
++        rider.setJumping(false); // fixes jump on mount
++    }
++
++    public void onDismount(Player player) {
++    }
++
++    public boolean onSpacebar() {
++        return false;
++    }
++
++    public boolean onClick(InteractionHand hand) {
++        return false;
++    }
++
++    public boolean processClick(InteractionHand hand) {
++        return false;
++    }
++    // Purpur end - Ridables
+ }
+diff --git a/net/minecraft/world/entity/Mob.java b/net/minecraft/world/entity/Mob.java
+index f7d69db61d1293510428ae275e8a50571dde5ddf..cb239ebca4afb9011805b0940582f825de254694 100644
+--- a/net/minecraft/world/entity/Mob.java
++++ b/net/minecraft/world/entity/Mob.java
+@@ -150,8 +150,8 @@ public abstract class Mob extends LivingEntity implements EquipmentUser, Leashab
+         super(entityType, level);
+         this.goalSelector = new GoalSelector();
+         this.targetSelector = new GoalSelector();
+-        this.lookControl = new LookControl(this);
+-        this.moveControl = new MoveControl(this);
++        this.lookControl = new org.purpurmc.purpur.controller.LookControllerWASD(this); // Purpur - Ridables
++        this.moveControl = new org.purpurmc.purpur.controller.MoveControllerWASD(this); // Purpur - Ridables
+         this.jumpControl = new JumpControl(this);
+         this.bodyRotationControl = this.createBodyControl();
+         this.navigation = this.createNavigation(level);
+@@ -1364,7 +1364,7 @@ public abstract class Mob extends LivingEntity implements EquipmentUser, Leashab
+     }
+ 
+     protected InteractionResult mobInteract(Player player, InteractionHand hand) {
+-        return InteractionResult.PASS;
++        return tryRide(player, hand); // Purpur - Ridables
+     }
+ 
+     public boolean isWithinRestriction() {
+@@ -1681,4 +1681,57 @@ public abstract class Mob extends LivingEntity implements EquipmentUser, Leashab
+     public float[] getArmorDropChances() {
+         return this.armorDropChances;
+     }
++    // Purpur start - Ridables
++    public double getMaxY() {
++        return level().getHeight();
++    }
++
++    public InteractionResult tryRide(Player player, InteractionHand hand) {
++        return tryRide(player, hand, InteractionResult.PASS);
++    }
++
++    public InteractionResult tryRide(Player player, InteractionHand hand, InteractionResult result) {
++        if (!isRidable()) {
++            return result;
++        }
++        if (hand != InteractionHand.MAIN_HAND) {
++            return InteractionResult.PASS;
++        }
++        if (player.isShiftKeyDown()) {
++            return InteractionResult.PASS;
++        }
++        if (!player.getItemInHand(hand).isEmpty()) {
++            return InteractionResult.PASS;
++        }
++        if (!passengers.isEmpty() || player.isPassenger()) {
++            return InteractionResult.PASS;
++        }
++        if (this instanceof TamableAnimal tamable) {
++            if (tamable.isTame() && !tamable.isOwnedBy(player)) {
++                return InteractionResult.PASS;
++            }
++            if (!tamable.isTame() && !level().purpurConfig.untamedTamablesAreRidable) {
++                return InteractionResult.PASS;
++            }
++        }
++        if (this instanceof AgeableMob ageable) {
++            if (ageable.isBaby() && !level().purpurConfig.babiesAreRidable) {
++                return InteractionResult.PASS;
++            }
++        }
++        if (!player.getBukkitEntity().hasPermission("allow.ride." + net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(getType()).getPath())) {
++            if (player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
++                serverPlayer.sendMiniMessage(org.purpurmc.purpur.PurpurConfig.cannotRideMob);
++            }
++            return InteractionResult.PASS;
++        }
++        player.setYRot(this.getYRot());
++        player.setXRot(this.getXRot());
++        if (player.startRiding(this)) {
++            return InteractionResult.SUCCESS;
++        } else {
++            return InteractionResult.PASS;
++        }
++    }
++    // Purpur end - Ridables
+ }
+diff --git a/net/minecraft/world/entity/animal/Cat.java b/net/minecraft/world/entity/animal/Cat.java
+index 1a7a5c81a260cc740994d1a63c4775c41c238dea..b4cb2312a1948781cf087fa6d2eb8bb96667605e 100644
+--- a/net/minecraft/world/entity/animal/Cat.java
++++ b/net/minecraft/world/entity/animal/Cat.java
+@@ -93,10 +93,36 @@ public class Cat extends TamableAnimal implements VariantHolder<Holder<CatVarian
+         this.reassessTameGoals();
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.catRidable;
++    }
++
++    @Override
++    public boolean dismountsUnderwater() {
++        return level().purpurConfig.useDismountsUnderwaterTag ? super.dismountsUnderwater() : !level().purpurConfig.catRidableInWater;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.catControllable;
++    }
++
++    @Override
++    public void onMount(Player rider) {
++        super.onMount(rider);
++        setInSittingPose(false);
++        setLying(false);
++        setRelaxStateOne(false);
++    }
++    // Purpur end - Ridables
++
+     @Override
+     protected void registerGoals() {
+         this.temptGoal = new Cat.CatTemptGoal(this, 0.6, itemStack -> itemStack.is(ItemTags.CAT_FOOD), true);
+         this.goalSelector.addGoal(1, new FloatGoal(this));
++        this.goalSelector.addGoal(1, new org.purpurmc.purpur.entity.ai.HasRider(this)); // Purpur - Ridables
+         this.goalSelector.addGoal(1, new TamableAnimal.TamableAnimalPanicGoal(1.5));
+         this.goalSelector.addGoal(2, new SitWhenOrderedToGoal(this));
+         this.goalSelector.addGoal(3, new Cat.CatRelaxOnOwnerGoal(this));
+@@ -109,6 +135,7 @@ public class Cat extends TamableAnimal implements VariantHolder<Holder<CatVarian
+         this.goalSelector.addGoal(10, new BreedGoal(this, 0.8));
+         this.goalSelector.addGoal(11, new WaterAvoidingRandomStrollGoal(this, 0.8, 1.0000001E-5F));
+         this.goalSelector.addGoal(12, new LookAtPlayerGoal(this, Player.class, 10.0F));
++        this.targetSelector.addGoal(1, new org.purpurmc.purpur.entity.ai.HasRider(this)); // Purpur - Ridables
+         this.targetSelector.addGoal(1, new NonTameRandomTargetGoal<>(this, Rabbit.class, false, null));
+         this.targetSelector.addGoal(1, new NonTameRandomTargetGoal<>(this, Turtle.class, false, Turtle.BABY_ON_LAND_SELECTOR));
+     }
+@@ -352,6 +379,7 @@ public class Cat extends TamableAnimal implements VariantHolder<Holder<CatVarian
+ 
+     @Override
+     public InteractionResult mobInteract(Player player, InteractionHand hand) {
++        if (getRider() != null) return InteractionResult.PASS; // Purpur - Ridables
+         ItemStack itemInHand = player.getItemInHand(hand);
+         Item item = itemInHand.getItem();
+         if (this.isTame()) {
+diff --git a/net/minecraft/world/entity/animal/Cod.java b/net/minecraft/world/entity/animal/Cod.java
+index 708bcc39e7242292d5d5bfcaf599e3738628df9b..6a19086e272363701260801f3c6db9b5c91b8ef5 100644
+--- a/net/minecraft/world/entity/animal/Cod.java
++++ b/net/minecraft/world/entity/animal/Cod.java
+@@ -13,6 +13,18 @@ public class Cod extends AbstractSchoolingFish {
+         super(entityType, level);
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.codRidable;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.codControllable;
++    }
++    // Purpur end - Ridables
++
+     @Override
+     public ItemStack getBucketItemStack() {
+         return new ItemStack(Items.COD_BUCKET);
+diff --git a/net/minecraft/world/entity/animal/Cow.java b/net/minecraft/world/entity/animal/Cow.java
+index befb99f0a96cb23f139061f92497737e9203a8fd..b2bf4276952fa1c984bf0571b041be4141fbdf3a 100644
+--- a/net/minecraft/world/entity/animal/Cow.java
++++ b/net/minecraft/world/entity/animal/Cow.java
+@@ -38,9 +38,27 @@ public class Cow extends Animal {
+         super(entityType, level);
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.cowRidable;
++    }
++
++    @Override
++    public boolean dismountsUnderwater() {
++        return level().purpurConfig.useDismountsUnderwaterTag ? super.dismountsUnderwater() : !level().purpurConfig.cowRidableInWater;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.cowControllable;
++    }
++    // Purpur end - Ridables
++
+     @Override
+     protected void registerGoals() {
+         this.goalSelector.addGoal(0, new FloatGoal(this));
++        this.goalSelector.addGoal(0, new org.purpurmc.purpur.entity.ai.HasRider(this)); // Purpur - Ridables
+         this.goalSelector.addGoal(1, new PanicGoal(this, 2.0));
+         this.goalSelector.addGoal(2, new BreedGoal(this, 1.0));
+         this.goalSelector.addGoal(3, new TemptGoal(this, 1.25, itemStack -> itemStack.is(ItemTags.COW_FOOD), false));
+@@ -86,13 +104,14 @@ public class Cow extends Animal {
+ 
+     @Override
+     public InteractionResult mobInteract(Player player, InteractionHand hand) {
++        if (getRider() != null) return InteractionResult.PASS; // Purpur - Ridables
+         ItemStack itemInHand = player.getItemInHand(hand);
+         if (itemInHand.is(Items.BUCKET) && !this.isBaby()) {
+             // CraftBukkit start - Got milk?
+             org.bukkit.event.player.PlayerBucketFillEvent event = org.bukkit.craftbukkit.event.CraftEventFactory.callPlayerBucketFillEvent((ServerLevel) player.level(), player, this.blockPosition(), this.blockPosition(), null, itemInHand, Items.MILK_BUCKET, hand);
+             if (event.isCancelled()) {
+                 player.containerMenu.sendAllDataToRemote(); // Paper - Fix inventory desync
+-                return InteractionResult.PASS;
++                return tryRide(player, hand); // Purpur - Ridables
+             }
+             // CraftBukkit end
+             player.playSound(SoundEvents.COW_MILK, 1.0F, 1.0F);
+diff --git a/net/minecraft/world/entity/animal/MushroomCow.java b/net/minecraft/world/entity/animal/MushroomCow.java
+index c1ff840d172be57170fceac26e4c76c2638742b0..e59dda739a9b74d70de5c6554154b94126302a6c 100644
+--- a/net/minecraft/world/entity/animal/MushroomCow.java
++++ b/net/minecraft/world/entity/animal/MushroomCow.java
+@@ -66,6 +66,23 @@ public class MushroomCow extends Cow implements Shearable, VariantHolder<Mushroo
+         return level.getBlockState(pos.below()).is(BlockTags.MOOSHROOMS_SPAWNABLE_ON) && isBrightEnoughToSpawn(level, pos);
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.mooshroomRidable;
++    }
++
++    @Override
++    public boolean dismountsUnderwater() {
++        return level().purpurConfig.useDismountsUnderwaterTag ? super.dismountsUnderwater() : !level().purpurConfig.mooshroomRidableInWater;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.mooshroomControllable;
++    }
++    // Purpur end - Ridables
++
+     @Override
+     public void thunderHit(ServerLevel level, LightningBolt lightning) {
+         UUID uuid = lightning.getUUID();
+@@ -115,7 +132,7 @@ public class MushroomCow extends Cow implements Shearable, VariantHolder<Mushroo
+                 java.util.List<ItemStack> drops = this.generateDefaultDrops(serverLevel, itemInHand);
+                 org.bukkit.event.player.PlayerShearEntityEvent event = org.bukkit.craftbukkit.event.CraftEventFactory.handlePlayerShearEntityEvent(player, this, itemInHand, hand, drops);
+                 if (event != null) {
+-                    if (event.isCancelled()) return InteractionResult.PASS;
++                    if (event.isCancelled()) return tryRide(player, hand); // Purpur - Ridables
+                     drops = org.bukkit.craftbukkit.inventory.CraftItemStack.asNMSCopy(event.getDrops());
+                     // Paper end - custom shear drops
+                 }
+diff --git a/net/minecraft/world/entity/animal/Parrot.java b/net/minecraft/world/entity/animal/Parrot.java
+index 16cc69b14fba16a5a5dfc05d63a40a5112314031..0cd22002a1af6075be4818a4b351ee716f228cb2 100644
+--- a/net/minecraft/world/entity/animal/Parrot.java
++++ b/net/minecraft/world/entity/animal/Parrot.java
+@@ -124,12 +124,68 @@ public class Parrot extends ShoulderRidingEntity implements VariantHolder<Parrot
+ 
+     public Parrot(EntityType<? extends Parrot> entityType, Level level) {
+         super(entityType, level);
+-        this.moveControl = new FlyingMoveControl(this, 10, false);
++        // Purpur start - Ridables
++        final org.purpurmc.purpur.controller.FlyingWithSpacebarMoveControllerWASD flyingController = new org.purpurmc.purpur.controller.FlyingWithSpacebarMoveControllerWASD(this, 0.3F);
++        class ParrotMoveControl extends FlyingMoveControl {
++            public ParrotMoveControl(Mob entity, int maxPitchChange, boolean noGravity) {
++                super(entity, maxPitchChange, noGravity);
++            }
++
++            @Override
++            public void tick() {
++                if (mob.getRider() != null && mob.isControllable()) {
++                    flyingController.purpurTick(mob.getRider());
++                } else {
++                    super.tick();
++                }
++            }
++
++            @Override
++            public boolean hasWanted() {
++                return mob.getRider() != null && mob.isControllable() ? getForwardMot() != 0 || getStrafeMot() != 0 : super.hasWanted();
++            }
++        }
++        this.moveControl = new ParrotMoveControl(this, 10, false);
++        // Purpur end - Ridables
+         this.setPathfindingMalus(PathType.DANGER_FIRE, -1.0F);
+         this.setPathfindingMalus(PathType.DAMAGE_FIRE, -1.0F);
+         this.setPathfindingMalus(PathType.COCOA, -1.0F);
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.parrotRidable;
++    }
++
++    @Override
++    public boolean dismountsUnderwater() {
++        return level().purpurConfig.useDismountsUnderwaterTag ? super.dismountsUnderwater() : !level().purpurConfig.parrotRidableInWater;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.parrotControllable;
++    }
++
++    @Override
++    public double getMaxY() {
++        return level().purpurConfig.parrotMaxY;
++    }
++
++    @Override
++    public void travel(Vec3 vec3) {
++        super.travel(vec3);
++        if (getRider() != null && this.isControllable() && !onGround) {
++            float speed = (float) getAttributeValue(Attributes.FLYING_SPEED) * 2;
++            setSpeed(speed);
++            Vec3 mot = getDeltaMovement();
++            move(net.minecraft.world.entity.MoverType.SELF, mot.multiply(speed, 0.25, speed));
++            setDeltaMovement(mot.scale(0.9D));
++        }
++    }
++    // Purpur end - Ridables
++
+     @Nullable
+     @Override
+     public SpawnGroupData finalizeSpawn(
+@@ -150,8 +206,10 @@ public class Parrot extends ShoulderRidingEntity implements VariantHolder<Parrot
+ 
+     @Override
+     protected void registerGoals() {
+-        this.goalSelector.addGoal(0, new TamableAnimal.TamableAnimalPanicGoal(1.25));
++        //this.goalSelector.addGoal(0, new TamableAnimal.TamableAnimalPanicGoal(1.25)); // Purpur - move down
+         this.goalSelector.addGoal(0, new FloatGoal(this));
++        this.goalSelector.addGoal(0, new org.purpurmc.purpur.entity.ai.HasRider(this)); // Purpur - Ridables
++        this.goalSelector.addGoal(1, new TamableAnimal.TamableAnimalPanicGoal(1.25D)); // Purpur - Ridables
+         this.goalSelector.addGoal(1, new LookAtPlayerGoal(this, Player.class, 8.0F));
+         this.goalSelector.addGoal(2, new SitWhenOrderedToGoal(this));
+         this.goalSelector.addGoal(2, new FollowOwnerGoal(this, 1.0, 5.0F, 1.0F));
+diff --git a/net/minecraft/world/entity/animal/Pig.java b/net/minecraft/world/entity/animal/Pig.java
+index d203d9c63c13f40a913235ad78a24a3bf489a083..70c60499a440aa4ac8bbc14d5fa440d9c51e2d82 100644
+--- a/net/minecraft/world/entity/animal/Pig.java
++++ b/net/minecraft/world/entity/animal/Pig.java
+@@ -56,9 +56,27 @@ public class Pig extends Animal implements ItemSteerable, Saddleable {
+         super(entityType, level);
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.pigRidable;
++    }
++
++    @Override
++    public boolean dismountsUnderwater() {
++        return level().purpurConfig.useDismountsUnderwaterTag ? super.dismountsUnderwater() : !level().purpurConfig.pigRidableInWater;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.pigControllable;
++    }
++    // Purpur end - Ridables
++
+     @Override
+     protected void registerGoals() {
+         this.goalSelector.addGoal(0, new FloatGoal(this));
++        this.goalSelector.addGoal(0, new org.purpurmc.purpur.entity.ai.HasRider(this)); // Purpur - Ridables
+         this.goalSelector.addGoal(1, new PanicGoal(this, 1.25));
+         this.goalSelector.addGoal(3, new BreedGoal(this, 1.0));
+         this.goalSelector.addGoal(4, new TemptGoal(this, 1.2, itemStack -> itemStack.is(Items.CARROT_ON_A_STICK), false));
+diff --git a/net/minecraft/world/entity/animal/TropicalFish.java b/net/minecraft/world/entity/animal/TropicalFish.java
+index fa5f7f7d54083f9ea2095dd44362069d00e0b9a5..1e31a39b276e1c5ae767da7af0b536007c87189e 100644
+--- a/net/minecraft/world/entity/animal/TropicalFish.java
++++ b/net/minecraft/world/entity/animal/TropicalFish.java
+@@ -67,6 +67,18 @@ public class TropicalFish extends AbstractSchoolingFish implements VariantHolder
+         super(entityType, level);
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.tropicalFishRidable;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.tropicalFishControllable;
++    }
++    // Purpur end - Ridables
++
+     public static String getPredefinedName(int variantId) {
+         return "entity.minecraft.tropical_fish.predefined." + variantId;
+     }
+diff --git a/net/minecraft/world/entity/animal/allay/Allay.java b/net/minecraft/world/entity/animal/allay/Allay.java
+index aafb32295d4ce239609bb62e6bdf2261739f7aa0..bf103586c6f9e0e7a07f1a0c3a247aea0e035c5e 100644
+--- a/net/minecraft/world/entity/animal/allay/Allay.java
++++ b/net/minecraft/world/entity/animal/allay/Allay.java
+@@ -119,10 +119,23 @@ public class Allay extends PathfinderMob implements InventoryCarrier, VibrationS
+     private float spinningAnimationTicks;
+     private float spinningAnimationTicks0;
+     public boolean forceDancing = false; // CraftBukkit
++    private org.purpurmc.purpur.controller.FlyingMoveControllerWASD purpurController; // Purpur - Ridables
+ 
+     public Allay(EntityType<? extends Allay> entityType, Level level) {
+         super(entityType, level);
+-        this.moveControl = new FlyingMoveControl(this, 20, true);
++        // Purpur start - Ridables
++        this.purpurController = new org.purpurmc.purpur.controller.FlyingMoveControllerWASD(this, 0.1F, 0.5F);
++        this.moveControl = new FlyingMoveControl(this, 20, true) {
++            @Override
++            public void tick() {
++                if (mob.getRider() != null && mob.isControllable()) {
++                    purpurController.purpurTick(mob.getRider());
++                } else {
++                    super.tick();
++                }
++            }
++        };
++        // Purpur end - Ridables
+         this.setCanPickUpLoot(this.canPickUpLoot());
+         this.vibrationUser = new Allay.VibrationUser();
+         this.vibrationData = new VibrationSystem.Data();
+@@ -138,6 +151,28 @@ public class Allay extends PathfinderMob implements InventoryCarrier, VibrationS
+     }
+     // CraftBukkit end
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.allayRidable;
++    }
++
++    @Override
++    public boolean dismountsUnderwater() {
++        return level().purpurConfig.useDismountsUnderwaterTag ? super.dismountsUnderwater() : !level().purpurConfig.allayRidableInWater;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.allayControllable;
++    }
++
++    @Override
++    protected void registerGoals() {
++        this.goalSelector.addGoal(0, new org.purpurmc.purpur.entity.ai.HasRider(this)); // Purpur - Ridables
++    }
++    // Purpur end - Ridables
++
+     @Override
+     protected Brain.Provider<Allay> brainProvider() {
+         return Brain.provider(MEMORY_TYPES, SENSOR_TYPES);
+@@ -247,6 +282,7 @@ public class Allay extends PathfinderMob implements InventoryCarrier, VibrationS
+     protected void customServerAiStep(ServerLevel level) {
+         ProfilerFiller profilerFiller = Profiler.get();
+         profilerFiller.push("allayBrain");
++        if ((getRider() == null || !this.isControllable()) /*&& this.behaviorTick++ % this.activatedPriority == 0*/)// Purpur - only use brain if no rider
+         this.getBrain().tick(level, this);
+         profilerFiller.pop();
+         profilerFiller.push("allayActivityUpdate");
+diff --git a/net/minecraft/world/entity/animal/frog/Tadpole.java b/net/minecraft/world/entity/animal/frog/Tadpole.java
+index 97adf8142cdd322c4873c420ed760e9dee34da23..a7d7c22356475764778305d7855070cc325ad98f 100644
+--- a/net/minecraft/world/entity/animal/frog/Tadpole.java
++++ b/net/minecraft/world/entity/animal/frog/Tadpole.java
+@@ -63,13 +63,50 @@ public class Tadpole extends AbstractFish {
+         MemoryModuleType.IS_PANICKING
+     );
+     public boolean ageLocked; // Paper
++    private org.purpurmc.purpur.controller.WaterMoveControllerWASD purpurController; // Purpur - Ridables
+ 
+     public Tadpole(EntityType<? extends AbstractFish> entityType, Level level) {
+         super(entityType, level);
+-        this.moveControl = new SmoothSwimmingMoveControl(this, 85, 10, 0.02F, 0.1F, true);
++        // Purpur start - Ridables
++        this.purpurController = new org.purpurmc.purpur.controller.WaterMoveControllerWASD(this, 0.5F);
++        this.moveControl = new SmoothSwimmingMoveControl(this, 85, 10, 0.02F, 0.1F, true) {
++            @Override
++            public void tick() {
++                Player rider = mob.getRider();
++                if (rider != null && mob.isControllable()) {
++                    purpurController.purpurTick(rider);
++                    mob.setDeltaMovement(mob.getDeltaMovement().add(0.0D, 0.002D, 0.0D));
++                } else {
++                    super.tick();
++                }
++            }
++        };
++        // Purpur end - Ridables
+         this.lookControl = new SmoothSwimmingLookControl(this, 10);
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.tadpoleRidable;
++    }
++
++    @Override
++    public boolean dismountsUnderwater() {
++        return level().purpurConfig.useDismountsUnderwaterTag ? super.dismountsUnderwater() : !level().purpurConfig.tadpoleRidableInWater;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.tadpoleControllable;
++    }
++
++    @Override
++    protected void registerGoals() {
++        this.goalSelector.addGoal(0, new org.purpurmc.purpur.entity.ai.HasRider(this)); // Purpur - Ridables
++    }
++    // Purpur end - Ridables
++
+     @Override
+     protected PathNavigation createNavigation(Level level) {
+         return new WaterBoundPathNavigation(this, level);
+@@ -99,6 +136,7 @@ public class Tadpole extends AbstractFish {
+     protected void customServerAiStep(ServerLevel level) {
+         ProfilerFiller profilerFiller = Profiler.get();
+         profilerFiller.push("tadpoleBrain");
++        if ((getRider() == null || !this.isControllable()) /*&& this.behaviorTick++ % this.activatedPriority == 0*/)// Purpur - only use brain if no rider
+         this.getBrain().tick(level, this);
+         profilerFiller.pop();
+         profilerFiller.push("tadpoleActivityUpdate");
+diff --git a/net/minecraft/world/entity/animal/horse/Horse.java b/net/minecraft/world/entity/animal/horse/Horse.java
+index c6d0700f29d6c8123e96efe225faf2d99202ac81..361bf346153912bcbfcf962d7f716dfe12ae2a7b 100644
+--- a/net/minecraft/world/entity/animal/horse/Horse.java
++++ b/net/minecraft/world/entity/animal/horse/Horse.java
+@@ -43,6 +43,13 @@ public class Horse extends AbstractHorse implements VariantHolder<Variant> {
+         super(entityType, level);
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean dismountsUnderwater() {
++        return level().purpurConfig.useDismountsUnderwaterTag ? super.dismountsUnderwater() : !level().purpurConfig.horseRidableInWater;
++    }
++    // Purpur end - Ridables
++
+     @Override
+     protected void randomizeAttributes(RandomSource random) {
+         this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(generateMaxHealth(random::nextInt));
+diff --git a/net/minecraft/world/entity/animal/horse/SkeletonHorse.java b/net/minecraft/world/entity/animal/horse/SkeletonHorse.java
+index 96d54de3f6dad646175dfc6d80c2124f7932aa73..fdf76fdaab0275471b989e5c1fc02e79beda2410 100644
+--- a/net/minecraft/world/entity/animal/horse/SkeletonHorse.java
++++ b/net/minecraft/world/entity/animal/horse/SkeletonHorse.java
+@@ -39,6 +39,13 @@ public class SkeletonHorse extends AbstractHorse {
+         super(entityType, level);
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isTamed() {
++        return super.isTamed() || this.level().purpurConfig.skeletonHorseRidable;
++    }
++    // Purpur end - Ridables
++
+     public static AttributeSupplier.Builder createAttributes() {
+         return createBaseHorseAttributes().add(Attributes.MAX_HEALTH, 15.0).add(Attributes.MOVEMENT_SPEED, 0.2F);
+     }
+@@ -58,6 +65,7 @@ public class SkeletonHorse extends AbstractHorse {
+ 
+     @Override
+     protected void addBehaviourGoals() {
++        if (level().purpurConfig.skeletonHorseCanSwim) goalSelector.addGoal(0, new net.minecraft.world.entity.ai.goal.FloatGoal(this)); // Purpur - Ridables
+     }
+ 
+     @Override
+diff --git a/net/minecraft/world/entity/animal/horse/TraderLlama.java b/net/minecraft/world/entity/animal/horse/TraderLlama.java
+index c5b11a63bb2ab660efcc386ad9b4697e2a5efc97..bd6d2fd5a6aa072a837984570d5f39fda7dd7adc 100644
+--- a/net/minecraft/world/entity/animal/horse/TraderLlama.java
++++ b/net/minecraft/world/entity/animal/horse/TraderLlama.java
+@@ -29,6 +29,28 @@ public class TraderLlama extends Llama {
+         super(entityType, level);
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.traderLlamaRidable;
++    }
++
++    @Override
++    public boolean dismountsUnderwater() {
++        return level().purpurConfig.useDismountsUnderwaterTag ? super.dismountsUnderwater() : !level().purpurConfig.traderLlamaRidableInWater;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.traderLlamaControllable;
++    }
++
++    @Override
++    public boolean isSaddled() {
++        return super.isSaddled() || isTamed();
++    }
++    // Purpur end - Ridables
++
+     @Override
+     public boolean isTraderLlama() {
+         return true;
+diff --git a/net/minecraft/world/entity/monster/CaveSpider.java b/net/minecraft/world/entity/monster/CaveSpider.java
+index 2e32567fca7a2a4cd87bc078a6eeb30e3ffabfce..4873a3d8dd9c160ecdbda594ee546c35ec03a1e7 100644
+--- a/net/minecraft/world/entity/monster/CaveSpider.java
++++ b/net/minecraft/world/entity/monster/CaveSpider.java
+@@ -26,6 +26,23 @@ public class CaveSpider extends Spider {
+         return Spider.createAttributes().add(Attributes.MAX_HEALTH, 12.0);
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.caveSpiderRidable;
++    }
++
++    @Override
++    public boolean dismountsUnderwater() {
++        return level().purpurConfig.useDismountsUnderwaterTag ? super.dismountsUnderwater() : !level().purpurConfig.caveSpiderRidableInWater;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.caveSpiderControllable;
++    }
++    // Purpur end - Ridables
++
+     @Override
+     public boolean doHurtTarget(ServerLevel level, Entity source) {
+         if (super.doHurtTarget(level, source)) {
+diff --git a/net/minecraft/world/entity/monster/Creeper.java b/net/minecraft/world/entity/monster/Creeper.java
+index 2c8d5b56e1c237f9d4a6d98c4a35a053a2c98df6..b031d35f9b6e82b2d9a4ac750cd387967a086ee4 100644
+--- a/net/minecraft/world/entity/monster/Creeper.java
++++ b/net/minecraft/world/entity/monster/Creeper.java
+@@ -50,21 +50,98 @@ public class Creeper extends Monster {
+     public int explosionRadius = 3;
+     private int droppedSkulls;
+     public Entity entityIgniter; // CraftBukkit
++    // Purpur start - Ridables
++    private int spacebarCharge = 0;
++    private int prevSpacebarCharge = 0;
++    private int powerToggleDelay = 0;
++    // Purpur end - Ridables
+ 
+     public Creeper(EntityType<? extends Creeper> entityType, Level level) {
+         super(entityType, level);
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.creeperRidable;
++    }
++
++    @Override
++    public boolean dismountsUnderwater() {
++        return level().purpurConfig.useDismountsUnderwaterTag ? super.dismountsUnderwater() : !level().purpurConfig.creeperRidableInWater;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.creeperControllable;
++    }
++
++    @Override
++    protected void customServerAiStep(ServerLevel world) {
++        if (powerToggleDelay > 0) {
++            powerToggleDelay--;
++        }
++        if (getRider() != null && this.isControllable()) {
++            if (getRider().getForwardMot() != 0 || getRider().getStrafeMot() != 0) {
++                spacebarCharge = 0;
++                setIgnited(false);
++                setSwellDir(-1);
++            }
++            if (spacebarCharge == prevSpacebarCharge) {
++                spacebarCharge = 0;
++            }
++            prevSpacebarCharge = spacebarCharge;
++        }
++        super.customServerAiStep(world);
++    }
++
++    @Override
++    public void onMount(Player rider) {
++        super.onMount(rider);
++        setIgnited(false);
++        setSwellDir(-1);
++    }
++
++    @Override
++    public boolean onSpacebar() {
++        if (powerToggleDelay > 0) {
++            return true; // just toggled power, do not jump or ignite
++        }
++        spacebarCharge++;
++        if (spacebarCharge > maxSwell - 2) {
++            spacebarCharge = 0;
++            if (getRider() != null && getRider().getBukkitEntity().hasPermission("allow.powered.creeper")) {
++                powerToggleDelay = 20;
++                setPowered(!isPowered());
++                setIgnited(false);
++                setSwellDir(-1);
++                return true;
++            }
++        }
++        if (!isIgnited()) {
++            if (getRider() != null && getRider().getForwardMot() == 0 && getRider().getStrafeMot() == 0 &&
++                    getRider().getBukkitEntity().hasPermission("allow.special.creeper")) {
++                setIgnited(true);
++                setSwellDir(1);
++                return true;
++            }
++        }
++        return getForwardMot() == 0 && getStrafeMot() == 0; // do not jump if standing still
++    }
++    // Purpur end - Ridables
++
+     @Override
+     protected void registerGoals() {
+         this.goalSelector.addGoal(1, new FloatGoal(this));
+         this.goalSelector.addGoal(2, new SwellGoal(this));
++        this.goalSelector.addGoal(3, new org.purpurmc.purpur.entity.ai.HasRider(this)); // Purpur - Ridables
+         this.goalSelector.addGoal(3, new AvoidEntityGoal<>(this, Ocelot.class, 6.0F, 1.0, 1.2));
+         this.goalSelector.addGoal(3, new AvoidEntityGoal<>(this, Cat.class, 6.0F, 1.0, 1.2));
+         this.goalSelector.addGoal(4, new MeleeAttackGoal(this, 1.0, false));
+         this.goalSelector.addGoal(5, new WaterAvoidingRandomStrollGoal(this, 0.8));
+         this.goalSelector.addGoal(6, new LookAtPlayerGoal(this, Player.class, 8.0F));
+         this.goalSelector.addGoal(6, new RandomLookAroundGoal(this));
++        this.targetSelector.addGoal(0, new org.purpurmc.purpur.entity.ai.HasRider(this)); // Purpur - Ridables
+         this.targetSelector.addGoal(1, new NearestAttackableTargetGoal<>(this, Player.class, true));
+         this.targetSelector.addGoal(2, new HurtByTargetGoal(this));
+     }
+@@ -287,6 +364,7 @@ public class Creeper extends Monster {
+             com.destroystokyo.paper.event.entity.CreeperIgniteEvent event = new com.destroystokyo.paper.event.entity.CreeperIgniteEvent((org.bukkit.entity.Creeper) getBukkitEntity(), ignited);
+             if (event.callEvent()) {
+                 this.entityData.set(Creeper.DATA_IS_IGNITED, event.isIgnited());
++                if (!event.isIgnited()) setSwellDir(-1); // Purpur - Ridables
+             }
+         }
+     }
+diff --git a/net/minecraft/world/entity/monster/ElderGuardian.java b/net/minecraft/world/entity/monster/ElderGuardian.java
+index 4585b7c867685f8419c4d2b5b90af5946d337f90..c6eeaf7b460408acfdf89d988b47b08eab7df4c5 100644
+--- a/net/minecraft/world/entity/monster/ElderGuardian.java
++++ b/net/minecraft/world/entity/monster/ElderGuardian.java
+@@ -31,6 +31,18 @@ public class ElderGuardian extends Guardian {
+         }
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.elderGuardianRidable;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.elderGuardianControllable;
++    }
++    // Purpur end - Ridables
++
+     public static AttributeSupplier.Builder createAttributes() {
+         return Guardian.createAttributes().add(Attributes.MOVEMENT_SPEED, 0.3F).add(Attributes.ATTACK_DAMAGE, 8.0).add(Attributes.MAX_HEALTH, 80.0);
+     }
+diff --git a/net/minecraft/world/entity/monster/Giant.java b/net/minecraft/world/entity/monster/Giant.java
+index 969eb604851d1cce50f0f99ed479189061d5de0c..135f83484ac31db7dcc225ba6f94e2e4ca27eea8 100644
+--- a/net/minecraft/world/entity/monster/Giant.java
++++ b/net/minecraft/world/entity/monster/Giant.java
+@@ -12,6 +12,29 @@ public class Giant extends Monster {
+         super(entityType, level);
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.giantRidable;
++    }
++
++    @Override
++    public boolean dismountsUnderwater() {
++        return level().purpurConfig.useDismountsUnderwaterTag ? super.dismountsUnderwater() : !level().purpurConfig.giantRidableInWater;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.giantControllable;
++    }
++
++    @Override
++    protected void registerGoals() {
++        this.goalSelector.addGoal(0, new org.purpurmc.purpur.entity.ai.HasRider(this));
++        this.targetSelector.addGoal(0, new org.purpurmc.purpur.entity.ai.HasRider(this));
++    }
++    // Purpur end - Ridables
++
+     public static AttributeSupplier.Builder createAttributes() {
+         return Monster.createMonsterAttributes().add(Attributes.MAX_HEALTH, 100.0).add(Attributes.MOVEMENT_SPEED, 0.5).add(Attributes.ATTACK_DAMAGE, 50.0);
+     }
+diff --git a/net/minecraft/world/entity/monster/Husk.java b/net/minecraft/world/entity/monster/Husk.java
+index 6155c544ad2722a49c5e41dd7d7b02fedc56474e..23936305045299352561e866b6a28aa515cd614a 100644
+--- a/net/minecraft/world/entity/monster/Husk.java
++++ b/net/minecraft/world/entity/monster/Husk.java
+@@ -21,6 +21,23 @@ public class Husk extends Zombie {
+         super(entityType, level);
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.huskRidable;
++    }
++
++    @Override
++    public boolean dismountsUnderwater() {
++        return level().purpurConfig.useDismountsUnderwaterTag ? super.dismountsUnderwater() : !level().purpurConfig.huskRidableInWater;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.huskControllable;
++    }
++    // Purpur end - Ridables
++
+     public static boolean checkHuskSpawnRules(
+         EntityType<Husk> entityType, ServerLevelAccessor level, EntitySpawnReason spawnReason, BlockPos pos, RandomSource random
+     ) {
+diff --git a/net/minecraft/world/entity/monster/Pillager.java b/net/minecraft/world/entity/monster/Pillager.java
+index e855ebc5be2cef3b96e2c01a8c1d388e433c0d52..4e799981f04cd17a34f043dda82869adcf16ea98 100644
+--- a/net/minecraft/world/entity/monster/Pillager.java
++++ b/net/minecraft/world/entity/monster/Pillager.java
+@@ -63,16 +63,35 @@ public class Pillager extends AbstractIllager implements CrossbowAttackMob, Inve
+         super(entityType, level);
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.pillagerRidable;
++    }
++
++    @Override
++    public boolean dismountsUnderwater() {
++        return level().purpurConfig.useDismountsUnderwaterTag ? super.dismountsUnderwater() : !level().purpurConfig.pillagerRidableInWater;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.pillagerControllable;
++    }
++    // Purpur end - Ridables
++
+     @Override
+     protected void registerGoals() {
+         super.registerGoals();
+         this.goalSelector.addGoal(0, new FloatGoal(this));
++        this.goalSelector.addGoal(0, new org.purpurmc.purpur.entity.ai.HasRider(this)); // Purpur - Ridables
+         this.goalSelector.addGoal(1, new AvoidEntityGoal<>(this, Creaking.class, 8.0F, 1.0, 1.2));
+         this.goalSelector.addGoal(2, new Raider.HoldGroundAttackGoal(this, 10.0F));
+         this.goalSelector.addGoal(3, new RangedCrossbowAttackGoal<>(this, 1.0, 8.0F));
+         this.goalSelector.addGoal(8, new RandomStrollGoal(this, 0.6));
+         this.goalSelector.addGoal(9, new LookAtPlayerGoal(this, Player.class, 15.0F, 1.0F));
+         this.goalSelector.addGoal(10, new LookAtPlayerGoal(this, Mob.class, 15.0F));
++        this.targetSelector.addGoal(0, new org.purpurmc.purpur.entity.ai.HasRider(this)); // Purpur - Ridables
+         this.targetSelector.addGoal(1, new HurtByTargetGoal(this, Raider.class).setAlertOthers());
+         this.targetSelector.addGoal(2, new NearestAttackableTargetGoal<>(this, Player.class, true));
+         this.targetSelector.addGoal(3, new NearestAttackableTargetGoal<>(this, AbstractVillager.class, false));
+diff --git a/net/minecraft/world/entity/monster/Skeleton.java b/net/minecraft/world/entity/monster/Skeleton.java
+index 16b2c127ec459a3b0855babb909f32f14cdefc63..58ace078f5b7c5582c2ad60faf294a1dd48f8fb2 100644
+--- a/net/minecraft/world/entity/monster/Skeleton.java
++++ b/net/minecraft/world/entity/monster/Skeleton.java
+@@ -25,6 +25,23 @@ public class Skeleton extends AbstractSkeleton {
+         super(entityType, level);
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.skeletonRidable;
++    }
++
++    @Override
++    public boolean dismountsUnderwater() {
++        return level().purpurConfig.useDismountsUnderwaterTag ? super.dismountsUnderwater() : !level().purpurConfig.skeletonRidableInWater;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.skeletonControllable;
++    }
++    // Purpur end - Ridables
++
+     @Override
+     protected void defineSynchedData(SynchedEntityData.Builder builder) {
+         super.defineSynchedData(builder);
+diff --git a/net/minecraft/world/entity/monster/Spider.java b/net/minecraft/world/entity/monster/Spider.java
+index af0305079a367899708ee2bbac82aefaa9129d2f..ea83335dd0d128b32d2fe513eab82e642b533b4c 100644
+--- a/net/minecraft/world/entity/monster/Spider.java
++++ b/net/minecraft/world/entity/monster/Spider.java
+@@ -50,15 +50,34 @@ public class Spider extends Monster {
+         super(entityType, level);
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.spiderRidable;
++    }
++
++    @Override
++    public boolean dismountsUnderwater() {
++        return level().purpurConfig.useDismountsUnderwaterTag ? super.dismountsUnderwater() : !level().purpurConfig.spiderRidableInWater;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.spiderControllable;
++    }
++    // Purpur end - Ridables
++
+     @Override
+     protected void registerGoals() {
+         this.goalSelector.addGoal(1, new FloatGoal(this));
++        this.goalSelector.addGoal(1, new org.purpurmc.purpur.entity.ai.HasRider(this)); // Purpur - Ridables
+         this.goalSelector.addGoal(2, new AvoidEntityGoal<>(this, Armadillo.class, 6.0F, 1.0, 1.2, livingEntity -> !((Armadillo)livingEntity).isScared()));
+         this.goalSelector.addGoal(3, new LeapAtTargetGoal(this, 0.4F));
+         this.goalSelector.addGoal(4, new Spider.SpiderAttackGoal(this));
+         this.goalSelector.addGoal(5, new WaterAvoidingRandomStrollGoal(this, 0.8));
+         this.goalSelector.addGoal(6, new LookAtPlayerGoal(this, Player.class, 8.0F));
+         this.goalSelector.addGoal(6, new RandomLookAroundGoal(this));
++        this.targetSelector.addGoal(0, new org.purpurmc.purpur.entity.ai.HasRider(this)); // Purpur - Ridables
+         this.targetSelector.addGoal(1, new HurtByTargetGoal(this));
+         this.targetSelector.addGoal(2, new Spider.SpiderTargetGoal<>(this, Player.class));
+         this.targetSelector.addGoal(3, new Spider.SpiderTargetGoal<>(this, IronGolem.class));
+diff --git a/net/minecraft/world/entity/monster/Stray.java b/net/minecraft/world/entity/monster/Stray.java
+index 5fa2b7920a233afb3659b02cbd7ab82307ea9aaf..ed7ba19870a09ac78c1f069040a25e47c4b19d3a 100644
+--- a/net/minecraft/world/entity/monster/Stray.java
++++ b/net/minecraft/world/entity/monster/Stray.java
+@@ -22,6 +22,23 @@ public class Stray extends AbstractSkeleton {
+         super(entityType, level);
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.strayRidable;
++    }
++
++    @Override
++    public boolean dismountsUnderwater() {
++        return level().purpurConfig.useDismountsUnderwaterTag ? super.dismountsUnderwater() : !level().purpurConfig.strayRidableInWater;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.strayControllable;
++    }
++    // Purpur end - Ridables
++
+     public static boolean checkStraySpawnRules(
+         EntityType<Stray> entityType, ServerLevelAccessor level, EntitySpawnReason spawnReason, BlockPos pos, RandomSource random
+     ) {
+diff --git a/net/minecraft/world/entity/monster/Strider.java b/net/minecraft/world/entity/monster/Strider.java
+index cbae85171a1bb64ee3be40ba211d88e68bf672e4..15c1608b1a8f4d59b1d2cbc9c113ac3198119fb2 100644
+--- a/net/minecraft/world/entity/monster/Strider.java
++++ b/net/minecraft/world/entity/monster/Strider.java
+@@ -94,6 +94,23 @@ public class Strider extends Animal implements ItemSteerable, Saddleable {
+         this.setPathfindingMalus(PathType.DAMAGE_FIRE, 0.0F);
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.striderRidable;
++    }
++
++    @Override
++    public boolean dismountsUnderwater() {
++        return level().purpurConfig.useDismountsUnderwaterTag ? super.dismountsUnderwater() : !level().purpurConfig.striderRidableInWater;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.striderControllable;
++    }
++    // Purpur end - Ridables
++
+     public static boolean checkStriderSpawnRules(
+         EntityType<Strider> entityType, LevelAccessor level, EntitySpawnReason spawnReason, BlockPos pos, RandomSource random
+     ) {
+@@ -156,6 +173,7 @@ public class Strider extends Animal implements ItemSteerable, Saddleable {
+     @Override
+     protected void registerGoals() {
+         this.goalSelector.addGoal(1, new PanicGoal(this, 1.65));
++        this.goalSelector.addGoal(0, new org.purpurmc.purpur.entity.ai.HasRider(this)); // Purpur - Ridables
+         this.goalSelector.addGoal(2, new BreedGoal(this, 1.0));
+         this.temptGoal = new TemptGoal(this, 1.4, itemStack -> itemStack.is(ItemTags.STRIDER_TEMPT_ITEMS), false);
+         this.goalSelector.addGoal(3, this.temptGoal);
+@@ -424,7 +442,7 @@ public class Strider extends Animal implements ItemSteerable, Saddleable {
+             InteractionResult interactionResult = super.mobInteract(player, hand);
+             if (!interactionResult.consumesAction()) {
+                 ItemStack itemInHand = player.getItemInHand(hand);
+-                return (InteractionResult)(itemInHand.is(Items.SADDLE) ? itemInHand.interactLivingEntity(player, this, hand) : InteractionResult.PASS);
++                return (InteractionResult)(itemInHand.is(Items.SADDLE) ? itemInHand.interactLivingEntity(player, this, hand) : tryRide(player, hand)); // Purpur - Ridables
+             } else {
+                 if (isFood && !this.isSilent()) {
+                     this.level()
+diff --git a/net/minecraft/world/entity/monster/Witch.java b/net/minecraft/world/entity/monster/Witch.java
+index 9f5676b5fa0f369adb8643391738c5ae33911df7..0b3c78e646d68ef57a7cf5d7eb77a07c497bd216 100644
+--- a/net/minecraft/world/entity/monster/Witch.java
++++ b/net/minecraft/world/entity/monster/Witch.java
+@@ -56,6 +56,23 @@ public class Witch extends Raider implements RangedAttackMob {
+         super(entityType, level);
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.witchRidable;
++    }
++
++    @Override
++    public boolean dismountsUnderwater() {
++        return level().purpurConfig.useDismountsUnderwaterTag ? super.dismountsUnderwater() : !level().purpurConfig.witchRidableInWater;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.witchControllable;
++    }
++    // Purpur end - Ridables
++
+     @Override
+     protected void registerGoals() {
+         super.registerGoals();
+@@ -64,10 +81,12 @@ public class Witch extends Raider implements RangedAttackMob {
+         );
+         this.attackPlayersGoal = new NearestAttackableWitchTargetGoal<>(this, Player.class, 10, true, false, null);
+         this.goalSelector.addGoal(1, new FloatGoal(this));
++        this.goalSelector.addGoal(1, new org.purpurmc.purpur.entity.ai.HasRider(this)); // Purpur - Ridables
+         this.goalSelector.addGoal(2, new RangedAttackGoal(this, 1.0, 60, 10.0F));
+         this.goalSelector.addGoal(2, new WaterAvoidingRandomStrollGoal(this, 1.0));
+         this.goalSelector.addGoal(3, new LookAtPlayerGoal(this, Player.class, 8.0F));
+         this.goalSelector.addGoal(3, new RandomLookAroundGoal(this));
++        this.targetSelector.addGoal(0, new org.purpurmc.purpur.entity.ai.HasRider(this)); // Purpur - Ridables
+         this.targetSelector.addGoal(1, new HurtByTargetGoal(this, Raider.class));
+         this.targetSelector.addGoal(2, this.healRaidersGoal);
+         this.targetSelector.addGoal(3, this.attackPlayersGoal);
+diff --git a/net/minecraft/world/entity/monster/Zombie.java b/net/minecraft/world/entity/monster/Zombie.java
+index 218236f42d1abb619d42c502707d0e5f9c201b21..454599d1038a0f0ba45bdefc7ddd4bc403d8a41a 100644
+--- a/net/minecraft/world/entity/monster/Zombie.java
++++ b/net/minecraft/world/entity/monster/Zombie.java
+@@ -100,11 +100,30 @@ public class Zombie extends Monster {
+         this(EntityType.ZOMBIE, level);
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.zombieRidable;
++    }
++
++    @Override
++    public boolean dismountsUnderwater() {
++        return level().purpurConfig.useDismountsUnderwaterTag ? super.dismountsUnderwater() : !level().purpurConfig.zombieRidableInWater;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.zombieControllable;
++    }
++    // Purpur end - Ridables
++
+     @Override
+     protected void registerGoals() {
++        this.goalSelector.addGoal(0, new org.purpurmc.purpur.entity.ai.HasRider(this)); // Purpur - Ridables
+         if (this.level().paperConfig().entities.behavior.zombiesTargetTurtleEggs) this.goalSelector.addGoal(4, new Zombie.ZombieAttackTurtleEggGoal(this, 1.0, 3)); // Paper - Add zombie targets turtle egg config
+         this.goalSelector.addGoal(8, new LookAtPlayerGoal(this, Player.class, 8.0F));
+         this.goalSelector.addGoal(8, new RandomLookAroundGoal(this));
++        this.targetSelector.addGoal(0, new org.purpurmc.purpur.entity.ai.HasRider(this)); // Purpur - Ridables
+         this.addBehaviourGoals();
+     }
+ 
+diff --git a/net/minecraft/world/entity/monster/piglin/Piglin.java b/net/minecraft/world/entity/monster/piglin/Piglin.java
+index d93a602b8fa2ef8d13df62448989e4c533e1aa22..37f3841a7c6dc1109902e6f400b0e53a9fb33910 100644
+--- a/net/minecraft/world/entity/monster/piglin/Piglin.java
++++ b/net/minecraft/world/entity/monster/piglin/Piglin.java
+@@ -151,6 +151,23 @@ public class Piglin extends AbstractPiglin implements CrossbowAttackMob, Invento
+         this.xpReward = 5;
+     }
+ 
++    // Purpur start - Ridables
++    @Override
++    public boolean isRidable() {
++        return level().purpurConfig.piglinRidable;
++    }
++
++    @Override
++    public boolean dismountsUnderwater() {
++        return level().purpurConfig.useDismountsUnderwaterTag ? super.dismountsUnderwater() : !level().purpurConfig.piglinRidableInWater;
++    }
++
++    @Override
++    public boolean isControllable() {
++        return level().purpurConfig.piglinControllable;
++    }
++    // Purpur end - Ridables
++
+     @Override
+     public void addAdditionalSaveData(CompoundTag compound) {
+         super.addAdditionalSaveData(compound);
+@@ -346,6 +363,7 @@ public class Piglin extends AbstractPiglin implements CrossbowAttackMob, Invento
+     protected void customServerAiStep(ServerLevel level) {
+         ProfilerFiller profilerFiller = Profiler.get();
+         profilerFiller.push("piglinBrain");
++        if ((getRider() == null || !this.isControllable()) /*&& this.behaviorTick++ % this.activatedPriority == 0*/) // Purpur - only use brain if no rider
+         this.getBrain().tick(level, this);
+         profilerFiller.pop();
+         PiglinAi.updateActivity(this);
+diff --git a/net/minecraft/world/entity/player/Player.java b/net/minecraft/world/entity/player/Player.java
+index 9e64fb5dc3535c548e2e025a14a77f04a0799ef9..187adcd19679951b38578033146808cb9fc18d7e 100644
+--- a/net/minecraft/world/entity/player/Player.java
++++ b/net/minecraft/world/entity/player/Player.java
+@@ -211,6 +211,19 @@ public abstract class Player extends LivingEntity {
+     }
+     // CraftBukkit end
+ 
++    // Purpur start - Ridables
++    public abstract void resetLastActionTime();
++
++    @Override
++    public boolean processClick(InteractionHand hand) {
++        Entity vehicle = getRootVehicle();
++        if (vehicle != null && vehicle.getRider() == this) {
++            return vehicle.onClick(hand);
++        }
++        return false;
++    }
++    // Purpur end - Ridables
++
+     public Player(Level level, BlockPos pos, float yRot, GameProfile gameProfile) {
+         super(EntityType.PLAYER, level);
+         this.setUUID(gameProfile.getId());
+diff --git a/net/minecraft/world/level/Level.java b/net/minecraft/world/level/Level.java
+index e0239091729f6be138c037951fd5c138497ee358..3954216a8fe9426478f30a2a8dc7d3f2984b1a90 100644
+--- a/net/minecraft/world/level/Level.java
++++ b/net/minecraft/world/level/Level.java
+@@ -162,6 +162,7 @@ public abstract class Level implements LevelAccessor, AutoCloseable {
+     }
+     // Paper end - add paper world config
+ 
++    public final org.purpurmc.purpur.PurpurWorldConfig purpurConfig; // Purpur - Purpur config files
+     public static BlockPos lastPhysicsProblem; // Spigot
+     private org.spigotmc.TickLimiter entityLimiter;
+     private org.spigotmc.TickLimiter tileLimiter;
+@@ -212,6 +213,7 @@ public abstract class Level implements LevelAccessor, AutoCloseable {
+     ) {
+         this.spigotConfig = new org.spigotmc.SpigotWorldConfig(((net.minecraft.world.level.storage.PrimaryLevelData) levelData).getLevelName()); // Spigot
+         this.paperConfig = paperWorldConfigCreator.apply(this.spigotConfig); // Paper - create paper world config
++        this.purpurConfig = new org.purpurmc.purpur.PurpurWorldConfig(((net.minecraft.world.level.storage.PrimaryLevelData) worlddatamutable).getLevelName(), env); // Purpur - Purpur config files
+         this.generator = gen;
+         this.world = new CraftWorld((ServerLevel) this, gen, biomeProvider, env);
+ 

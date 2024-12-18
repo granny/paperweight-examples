@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: granny <contact@granny.dev>
+Date: Tue, 17 Dec 2024 19:27:59 -0800
+Subject: [PATCH] Purpur config files
+
+
+diff --git a/net/minecraft/commands/CommandSourceStack.java b/net/minecraft/commands/CommandSourceStack.java
+index 704a63890a06d793f8ac3452838917e7c7335232..fcb3d7244d1a82f4e38100c89a006bc52d0b5425 100644
+--- a/net/minecraft/commands/CommandSourceStack.java
++++ b/net/minecraft/commands/CommandSourceStack.java
+@@ -517,6 +517,30 @@ public class CommandSourceStack implements ExecutionCommandSource<CommandSourceS
+         }
+     }
+ 
++    // Purpur start - Purpur config files
++    public void sendSuccess(@Nullable String message) {
++        sendSuccess(message, false);
++    }
++
++    public void sendSuccess(@Nullable String message, boolean broadcastToOps) {
++        if (message == null) {
++            return;
++        }
++        sendSuccess(net.kyori.adventure.text.minimessage.MiniMessage.miniMessage().deserialize(message), broadcastToOps);
++    }
++
++    public void sendSuccess(@Nullable net.kyori.adventure.text.Component message) {
++        sendSuccess(message, false);
++    }
++
++    public void sendSuccess(@Nullable net.kyori.adventure.text.Component message, boolean broadcastToOps) {
++        if (message == null) {
++            return;
++        }
++        sendSuccess(() -> io.papermc.paper.adventure.PaperAdventure.asVanilla(message), broadcastToOps);
++    }
++    // Purpur end - Purpur config files
++
+     public void sendSuccess(Supplier<Component> messageSupplier, boolean allowLogging) {
+         boolean flag = this.source.acceptsSuccess() && !this.silent;
+         boolean flag1 = allowLogging && this.source.shouldInformAdmins() && !this.silent;
+diff --git a/net/minecraft/server/dedicated/DedicatedServer.java b/net/minecraft/server/dedicated/DedicatedServer.java
+index 1ad96b964cdcf10b9f81d32d07e03c1a0ab6fe0a..4bfb8d8966b5c79910ee8d1ec64f5eade4bf9b68 100644
+--- a/net/minecraft/server/dedicated/DedicatedServer.java
++++ b/net/minecraft/server/dedicated/DedicatedServer.java
+@@ -224,6 +224,15 @@ public class DedicatedServer extends MinecraftServer implements ServerInterface
+         io.papermc.paper.command.PaperCommands.registerCommands(this); // Paper - setup /paper command
+         this.server.spark.registerCommandBeforePlugins(this.server); // Paper - spark
+         com.destroystokyo.paper.Metrics.PaperMetrics.startMetrics(); // Paper - start metrics
++        // Purpur start - Purpur config files
++        try {
++            org.purpurmc.purpur.PurpurConfig.init((java.io.File) options.valueOf("purpur-settings"));
++        } catch (Exception e) {
++            DedicatedServer.LOGGER.error("Unable to load server configuration", e);
++            return false;
++        }
++        org.purpurmc.purpur.PurpurConfig.registerCommands();
++        // Purpur end - Purpur config files
+         com.destroystokyo.paper.VersionHistoryManager.INSTANCE.getClass(); // Paper - load version history now
+ 
+         this.setPvpAllowed(properties.pvp);
